@@ -24,7 +24,7 @@ var
   bssStart {.importc: "__bss_start__".}: cint
   bssEnd {.importc: "__bss_end__".}: cint
 
-proc resetHandler {.noconv, noreturn, codegenDecl: "[[noreturn, gnu::naked]] $# $#$#".} =
+proc resetHandler {.noconv, exportc, noreturn, codegenDecl: "[[noreturn, gnu::naked]] $# $#$#".} =
   # Fill BSS with zero.
   var p = bssStart.addr
   while p != bssEnd.addr:
@@ -34,39 +34,58 @@ proc resetHandler {.noconv, noreturn, codegenDecl: "[[noreturn, gnu::naked]] $# 
   discard main(1, nil, nil)
   trap()
 
-proc defaultIsr {.noconv.} =
+proc defaultIsr {.noconv, exportc.} =
   trap()
 
-var interruptVectorTable {.codegenDecl: "[[gnu::section(\".vectors\")]] $# $# ".} : array[16, proc() {.noconv.}]
-#[
-  = [
-    cast[proc() {.noconv.}](stackTop.addr),
-    resetHandler,
-    defaultIsr, # NMI
-    defaultIsr, # hardfault
-    defaultIsr,
-    defaultIsr,
-    defaultIsr,
-    defaultIsr,
-    defaultIsr,
-    defaultIsr,
-    defaultIsr,
-    defaultIsr, # svcall
-    defaultIsr,
-    defaultIsr,
-    defaultIsr, # pendsv
-    defaultIsr, # systick
-  ]
-]#
+when false:
+  var interruptVectorTable {.codegenDecl: "[[gnu::section(\".vectors\")]] $# $# ".} : array[16, proc() {.noconv.}]
+  #[
+    = [
+      cast[proc() {.noconv.}](stackTop.addr),
+      resetHandler,
+      defaultIsr, # NMI
+      defaultIsr, # hardfault
+      defaultIsr,
+      defaultIsr,
+      defaultIsr,
+      defaultIsr,
+      defaultIsr,
+      defaultIsr,
+      defaultIsr,
+      defaultIsr, # svcall
+      defaultIsr,
+      defaultIsr,
+      defaultIsr, # pendsv
+      defaultIsr, # systick
+    ]
+  ]#
+else:
+  {.emit:"""/*VARSECTION*/
+    [[gnu::section(".vectors")]] void (*interruptVectorTable[])() = {
+      (void (*)())&__StackTop,
+      resetHandler,
+      defaultIsr,   // NMI
+      defaultIsr,   // hardfault
+      defaultIsr,
+      defaultIsr,
+      defaultIsr,
+      defaultIsr,
+      defaultIsr,
+      defaultIsr,
+      defaultIsr,
+      defaultIsr,   // svcall
+      defaultIsr,
+      defaultIsr,
+      defaultIsr,   // pendsv
+      defaultIsr,   // systick
+    };
+  """.}
+
+  var interruptVectorTable {.importc.}: array[16, proc () {.noconv.}]
 
 # Bootrom jumps to here.
 proc entryPoint {.exportc: "_entry_point", noreturn, codegenDecl: "[[noreturn, gnu::naked, gnu::section(\".reset\")]] $# $#$#".} =
   volatileStore PPBVTOR, cast[ptr UncheckedArray[proc() {.noconv.}]](interruptVectorTable.addr)
-  interruptVectorTable[0] = cast[proc() {.noconv.}](stackTop.addr)
-  interruptVectorTable[1] = resetHandler
-
-  for i in 2 ..< interruptVectorTable.len:
-    interruptVectorTable[i] = defaultIsr
 
   # Set stack pointer.
   # You should not use any instructions that uses the stack pointer
