@@ -1,3 +1,4 @@
+import std/volatile
 import registerAccess
 
 when false:
@@ -17,6 +18,9 @@ when false:
 else:
   import startup
 
+proc breakPoint =
+  asm "bkpt #0xab"
+
 type
   ResetsHw = object
     reset: ioRw32
@@ -26,8 +30,56 @@ type
 const
   ResetsBase          = 0x4000_c000'u
   ResetsResetUART0Bit = 1'u32 shl 22'u32
+  ResetsResetPADS_BANK0Bit = 1'u32 shl 8'u32
+  ResetsResetIO_BANK0Bit = 1'u32 shl 5'u32
 
 let resetsHW {.volatile.} = cast[ptr ResetsHW](ResetsBase)
+
+type
+  ClockKind = enum
+    ckGpOut0 = 0,
+    ckGpOut1 = 1,
+    ckGpOut2 = 2,
+    ckGpOut3 = 3,
+    ckRef = 4,
+    ckSys = 5,
+    ckPeri = 6,
+    ckUsb = 7,
+    ckAdc = 8,
+    ckRtc = 9
+
+  ClockHw = object
+    ctrl: ioRw32
+    divisor: ioRw32
+    selected: ioRo32
+
+  ClocksHw = object
+    clk: array[ClockKind, ClockHw]
+
+const
+  ClocksClkCtrlEnableBit = 1'u32 shl 11'u32
+  ClocksClkPeriCtrlAUXSRCBits = 7'u32 shl 5'u32
+
+var clocksHw {.volatile.} = cast[ptr ClocksHw](0x40008000'u32)
+
+proc initClocks =
+  # Configure clocks to known state.
+
+  hwClearBits(clocksHw.clk[ckSys].ctrl, 1)
+  while (clocksHw.clk[ckSys].selected.uint32 and 1'u32) != 1'u32:
+    discard
+  clocksHw.clk[ckSys].divisor = 0x100'u32.ioRw32
+
+  hwClearBits(clocksHw.clk[ckRef].ctrl, 3)
+  while (clocksHw.clk[ckRef].selected.uint32 and 1'u32) != 1'u32:
+    discard
+  clocksHw.clk[ckRef].divisor = 0x100'u32.ioRw32
+
+  # clk_peri is used by UART.
+  hwClearBits(clocksHw.clk[ckPeri].ctrl, ClocksClkCtrlEnableBit)
+  hwWriteMasked(clocksHw.clk[ckPeri].ctrl, 0'u32, ClocksClkPeriCtrlAUXSRCBits)
+  hwSetBits(clocksHw.clk[ckPeri].ctrl, ClocksClkCtrlEnableBit)
+  clocksHw.clk[ckPeri].divisor = 0x100'u32.ioRw32
 
 const NumBank0GPIOs = 30
 
@@ -53,10 +105,24 @@ const
   PadsBank0GPIOIEBit = 1'u32 shl 6
 
 proc gpioSetUart(gpio: int) =
-  hwWriteMasked(padsBankHw.gpios[gpio], PadsBank0GPIOIEBit, 
+  hwWriteMasked(padsBankHw.gpios[gpio], PadsBank0GPIOIEBit,
                 PadsBank0GPIOODBit or PadsBank0GPIOIEBit)
 
   ioBank0Hw.io[gpio].ctrl = 2.ioRw32
+
+type
+  SioHw = object
+    somePadding0: array[4, uint32]
+    gpioOut: ioRw32
+    somePadding1: array[3, uint32]
+    gpioOE: ioRw32
+
+var sioHw {.volatile.} = cast[ptr SioHw](0xd0000000)
+
+proc ledOn =
+  ioBank0Hw.io[25].ctrl = 5.ioRw32
+  sioHw.gpioOE = (1'u32 shl 25).ioRw32
+  sioHw.gpioOut = (1'u32 shl 25).ioRw32
 
 type
   UartHw = object
@@ -106,11 +172,16 @@ proc uartWriteLCRBitsMasked(values, writeMask: uint32) =
   uart0hw.cr = crSave.ioRw32
 
 proc uartSetBaudrate(baudRate: static uint32) =
-  # Suppose clk_peri was initialize in clocks_init in
-  # pico-sdk/src/rp2_common/hardware_clocks/clocks.c
-  # and equals to clk_sys.
   const
-    ClkPeri = 125_000_000'u32
+    ClkPeri = when true:
+                # Suppose clk_peri was initialized in `initClocks`.
+                # So it should be the same to ROSC.
+                6_000_000'u32
+              else:
+                # Suppose clk_peri was initialize in clocks_init in
+                # pico-sdk/src/rp2_common/hardware_clocks/clocks.c
+                # and equals to clk_sys.
+                125_000_000'u32
     UARTCLK = ClkPeri
 
   # See 4.2.3.1. in
@@ -158,16 +229,21 @@ proc uartWrite(text: string) =
     uart0hw.dr = i.ioRw32
 
 proc main =
-  resetsHW.reset.hwSetBits(ResetsResetUART0Bit)
-  resetsHW.reset.hwClearBits(ResetsResetUART0Bit)
-  while (resetsHW.resetDone.uint32 and ResetsResetUART0Bit) == 0:
+  initClocks()
+
+  const resetMask = ResetsResetUART0Bit or ResetsResetPADS_BANK0Bit or ResetsResetIO_BANK0Bit
+  resetsHW.reset.hwSetBits(resetMask)
+  resetsHW.reset.hwClearBits(resetMask)
+  while ((not resetsHW.resetDone.uint32) and resetMask) != 0:
     discard
 
   gpioSetUart(0)
   gpioSetUart(1)
 
   uartInit()
-  uartWrite("This is minimum pure Nim pico program!")
+
+  uartWrite("This is minimum pure Nim pico program!\r\n")
+  ledOn()
 
 main()
 
