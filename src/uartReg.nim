@@ -81,6 +81,19 @@ proc initClocks =
   hwSetBits(clocksHw.clk[ckPeri].ctrl, ClocksClkCtrlEnableBit)
   clocksHw.clk[ckPeri].divisor = 0x100'u32.ioRw32
 
+type
+  TimerHw = object
+    dummy: array[9, int32]
+    timeRawH: ioRo32
+    timeRawL: ioRo32
+
+var timerHw {.volatile.} = cast[ptr TimerHw](0x40054000)
+
+proc busyWaitMicroSec(delay: int32) =
+  let start = timerHw.timeRawL.uint32
+  while (timerHw.timeRawL.uint32 - start) <= delay.uint32:
+    discard
+
 const NumBank0GPIOs = 30
 
 type
@@ -111,18 +124,24 @@ proc gpioSetUart(gpio: int) =
   ioBank0Hw.io[gpio].ctrl = 2.ioRw32
 
 type
+  # SIO doesn't support atomic access
   SioHw = object
     somePadding0: array[4, uint32]
-    gpioOut: ioRw32
-    somePadding1: array[3, uint32]
-    gpioOE: ioRw32
+    gpioOut: uint32
+    gpioOutSet: uint32
+    gpioOutClr: uint32
+    gpioOutXor: uint32
+    gpioOE: uint32
 
 var sioHw {.volatile.} = cast[ptr SioHw](0xd0000000)
 
 proc ledOn =
   ioBank0Hw.io[25].ctrl = 5.ioRw32
-  sioHw.gpioOE = (1'u32 shl 25).ioRw32
-  sioHw.gpioOut = (1'u32 shl 25).ioRw32
+  sioHw.gpioOE = 1'u32 shl 25
+  sioHw.gpioOut = 1'u32 shl 25
+
+proc ledFlip =
+  sioHw.gpioOutXor = 1'u32 shl 25
 
 type
   UartHw = object
@@ -242,8 +261,12 @@ proc main =
 
   uartInit()
 
-  uartWrite("This is minimum pure Nim pico program!\r\n")
   ledOn()
+
+  while true:
+    uartWrite("This is minimum pure Nim pico program!\r\n")
+    ledFlip()
+    busyWaitMicroSec(15_000)
 
 main()
 
