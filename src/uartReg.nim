@@ -62,24 +62,55 @@ const
 
 var clocksHw {.volatile.} = cast[ptr ClocksHw](0x40008000'u32)
 
-proc initClocks =
-  # Configure clocks to known state.
+type
+  RoscHw = object
+    ctrl: ioRw32
 
-  hwClearBits(clocksHw.clk[ckSys].ctrl, 1)
-  while (clocksHw.clk[ckSys].selected.uint32 and 1'u32) != 1'u32:
-    discard
-  clocksHw.clk[ckSys].divisor = 0x100'u32.ioRw32
+var roscHw {.volatile.} = cast[ptr RoscHw](0x40060000'u32)
+
+type
+  WatchdogHw = object
+    ctrl: ioRw32
+    load: ioRw32
+    reason: ioRo32
+    scratch: array[8, ioRw32]
+    tick: ioRw32
+
+var watchdogHw {.volatile.} = cast[ptr WatchdogHw](0x40058000'u32)
+
+proc initClocks =
+  # Set ring oscillator, rclocks and tick to known state,
+  # even if their register values are the same to reset values.
+  # They can be different from reset value because they can be
+  # changed by the program ran before this program.
+
+  # `clk_ref` and `clk_sys` generate clock from Ring Oscillator.
+  # Don't use crystal oscillator as using ring oscillator is simpler
+  # and you can design a board without crystal oscillator.
+  hwWriteMasked(roscHw.ctrl, 0xfab shl 12, 0xfff shl 12)
 
   hwClearBits(clocksHw.clk[ckRef].ctrl, 3)
   while (clocksHw.clk[ckRef].selected.uint32 and 1'u32) != 1'u32:
     discard
   clocksHw.clk[ckRef].divisor = 0x100'u32.ioRw32
 
+  hwClearBits(clocksHw.clk[ckSys].ctrl, 1)
+  while (clocksHw.clk[ckSys].selected.uint32 and 1'u32) != 1'u32:
+    discard
+  clocksHw.clk[ckSys].divisor = 0x100'u32.ioRw32
+
   # clk_peri is used by UART.
   hwClearBits(clocksHw.clk[ckPeri].ctrl, ClocksClkCtrlEnableBit)
   hwWriteMasked(clocksHw.clk[ckPeri].ctrl, 0'u32, ClocksClkPeriCtrlAUXSRCBits)
   hwSetBits(clocksHw.clk[ckPeri].ctrl, ClocksClkCtrlEnableBit)
   clocksHw.clk[ckPeri].divisor = 0x100'u32.ioRw32
+
+  # `TIMER.TIMERAWL` is incremented every `WATCHDOG.TICK.CYCLES`
+  # cycle of `clk_ref`.
+  # Suppose ring oscillator runs at a nominal 6.5MHz.
+  # Set 65 to tick so that timerHw.timeRawL is incremented
+  # 100_000 times per second.
+  watchdogHw.tick = (0x200 + 65).ioRw32
 
 type
   TimerHw = object
@@ -89,9 +120,11 @@ type
 
 var timerHw {.volatile.} = cast[ptr TimerHw](0x40054000)
 
-proc busyWaitMicroSec(delay: int32) =
-  let start = timerHw.timeRawL.uint32
-  while (timerHw.timeRawL.uint32 - start) <= delay.uint32:
+proc busyWaitMilliSec(delay: int32) =
+  let
+    delayT = delay.uint32 * 100
+    start = timerHw.timeRawL.uint32
+  while (timerHw.timeRawL.uint32 - start) <= delayT:
     discard
 
 const NumBank0GPIOs = 30
@@ -241,11 +274,22 @@ proc uartInit =
   hwSetBits(uart0hw.lcrh, UartLCRHFEnBit)
   uart0hw.cr = (UartCRUartEnBit or UartCRTXEBit or UartCRRXEBit).ioRw32
 
-proc uartWrite(text: string) =
+proc uartWrite(text: static string) =
   for i in text:
     while (uart0hw.fr.uint32 and UartFRTXFFBit) != 0:
       discard
     uart0hw.dr = i.ioRw32
+
+when false:
+  proc uartWriteBin(x: uint32) =
+    for i in 0..31:
+      if (i and 7) == 0:
+        while (uart0hw.fr.uint32 and UartFRTXFFBit) != 0:
+          discard
+        uart0hw.dr = ioRw32 ' '
+      while (uart0hw.fr.uint32 and UartFRTXFFBit) != 0:
+        discard
+      uart0hw.dr = ioRw32(if (x and (1'u32 shl (31 - i))) == 0: '0' else: '1')
 
 proc main =
   initClocks()
@@ -266,7 +310,7 @@ proc main =
   while true:
     uartWrite("This is minimum pure Nim pico program!\r\n")
     ledFlip()
-    busyWaitMicroSec(15_000)
+    busyWaitMilliSec(1_000)
 
 main()
 
