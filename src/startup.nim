@@ -7,10 +7,10 @@ const PicoMemoryPlacement {.strdefine.} = "flash"
 # In C lang, program starts from main function.
 # Nim generates C main function.
 # resetHandler proc calls it.
-proc main(argc: cint; args: ptr cstring; env: ptr cstring): int {.importc.}
+proc main(argc: cint; args: ptr cstring; env: ptr cstring): cint {.importc.}
 proc trap {.importc: "__builtin_trap".}
 
-proc incPtr[T](p: var ptr T) =
+template incPtr[T](p: var ptr T) =
   p = cast[ptr T](cast[uint](p) + sizeof(T).uint)
 
 var
@@ -46,7 +46,11 @@ when PicoMemoryPlacement != "noFlash":
       incPtr src
       incPtr dst
 
-proc resetHandler {.noconv, exportc, noreturn, codegenDecl: "[[noreturn, gnu::naked]] $# $#$#".} =
+proc resetHandler {.noconv,
+                    exportc,
+                    asmNoStackFrame,
+                    noreturn,
+                    codegenDecl: "[[noreturn, gnu::naked]] $# $#$#".} =
   when PicoMemoryPlacement != "noFlash":
     copyMem etext.addr, dataStart.addr, dataEnd.addr
     copyMem scratchXSrc.addr, scratchXStart.addr, scratchXEnd.addr
@@ -111,7 +115,10 @@ else:
   #var interruptVectorTable {.importc.}: array[16, proc () {.noconv.}]
 
 # Bootrom jumps to here.
-proc entryPoint {.exportc: "_entry_point", noreturn, codegenDecl: "[[noreturn, gnu::naked, gnu::section(\".reset\")]] $# $#$#".} =
+proc entryPoint {.exportc: "_entry_point",
+                  asmNoStackFrame,
+                  noreturn,
+                  codegenDecl: "[[noreturn, gnu::naked, gnu::section(\".reset\")]] $# $#$#".} =
   when true:
     # This code need to be written as assembler because:
     #   - It must not use stack pointer because it is not set.
