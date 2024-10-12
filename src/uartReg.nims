@@ -20,8 +20,8 @@ const
   # without '.h' suffix.
   PicoBoard {.strdefine.} = "pico"
 
-switch("define", "danger")
-switch("mm", "none") # use "arc", "orc" or "none"
+#switch("define", "danger")
+switch("mm", "arc") # use "arc", "orc" or "none"
 # Don't need to enable checkAbi unless you use C header.
 #switch("define", "checkAbi")
 switch("define", "useMalloc")
@@ -30,8 +30,11 @@ switch("cpu", "arm")
 switch("os", "any")
 switch("threads", "off")
 switch("gcc.options.linker", "")
+switch("gcc.cpp.options.linker", "--specs=nosys.specs")
 switch("arm.any.gcc.exe", "arm-none-eabi-gcc")
 switch("arm.any.gcc.linkerexe", "arm-none-eabi-gcc")
+switch("arm.any.gcc.cpp.exe", "arm-none-eabi-g++")
+switch("arm.any.gcc.cpp.linkerexe", "arm-none-eabi-g++")
 # `-ffunction-sections` and `-fdata-sections` in passC and `-Wl,--gc-sections` are optional. They makes output program smaller.
 switch("passC", "-mcpu=cortex-m0plus -mthumb -ffunction-sections -fdata-sections")
 const
@@ -40,7 +43,7 @@ const
                  elif PicoMemoryPlacement == "noFlash":
                    "memmap_no_flash.ld"
   LinkerScriptPath = &"{PicoSDKPathAbs}/src/rp2_common/pico_crt0/rp2040/{LinkerScript}"
-switch("passL", &"-mcpu=cortex-m0plus -mthumb -nostartfiles -nodefaultlibs -Wl,--gc-sections -T {LinkerScriptPath}")
+switch("passL", &"-mcpu=cortex-m0plus -mthumb -nostartfiles -Wl,--gc-sections -T {LinkerScriptPath}")
 # Generate map file
 switch("passL", "-Wl,-Map=uartReg.map")
 
