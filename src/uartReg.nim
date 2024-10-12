@@ -318,3 +318,19 @@ proc exit {.exportc.} =
   # exit function called from `pico_crt0/crt0.S`.
   # It says `exit` should not return.
   discard
+
+proc terminate {.exportcpp: "nimTerminate".} =
+  while true:
+    discard
+
+# This variable is defined in
+# libstdc++-v3/libsupc++/eh_unex_handler.cc
+# libstdc++-v3/libsupc++/unwind-cxx.h
+# in GCC
+
+{.emit: """
+#include <exception>
+namespace __cxxabiv1 {
+std::terminate_handler __terminate_handler = nimTerminate;
+}
+""".}
